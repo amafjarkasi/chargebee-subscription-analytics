@@ -12,8 +12,6 @@ from pathlib import Path
 from typing import Any
 import math
 
-from .utils import calculate_mrr, days_ago, load_json_file, months_ago, parse_timestamp
-
 logger = logging.getLogger("chargebee_mapper.clv_predictor")
 
 
@@ -77,6 +75,32 @@ class CLVAnalysisResult:
         }
 
 
+def _parse_timestamp(ts: int | None) -> datetime | None:
+    """Convert Unix timestamp to datetime."""
+    if ts is None:
+        return None
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except (ValueError, OSError):
+        return None
+
+
+def _days_since(dt: datetime | None) -> int:
+    """Calculate days since a datetime."""
+    if dt is None:
+        return 0
+    now = datetime.now(timezone.utc)
+    return max(0, (now - dt).days)
+
+
+def _months_since(dt: datetime | None) -> int:
+    """Calculate months since a datetime."""
+    if dt is None:
+        return 0
+    now = datetime.now(timezone.utc)
+    return max(1, (now.year - dt.year) * 12 + (now.month - dt.month))
+
+
 class CLVPredictor:
     """Predicts customer lifetime value using RFM-based analysis."""
     
@@ -91,15 +115,14 @@ class CLVPredictor:
         self._customers: list[dict] = []
         self._invoices: list[dict] = []
         self._subscriptions: list[dict] = []
-        self._loaded = False
         
     def load_data(self) -> bool:
         """Load required JSON data files."""
         logger.info("Loading data from %s", self.json_dir)
         
-        self._customers = load_json_file(self.json_dir / "customers.json")
-        self._invoices = load_json_file(self.json_dir / "invoices.json")
-        self._subscriptions = load_json_file(self.json_dir / "subscriptions.json")
+        self._customers = self._load_json("customers.json")
+        self._invoices = self._load_json("invoices.json")
+        self._subscriptions = self._load_json("subscriptions.json")
         
         if not self._customers:
             logger.error("No customer data found")
@@ -109,15 +132,23 @@ class CLVPredictor:
             "Loaded: %d customers, %d invoices, %d subscriptions",
             len(self._customers), len(self._invoices), len(self._subscriptions)
         )
-        self._loaded = True
         return True
     
+    def _load_json(self, filename: str) -> list[dict]:
+        """Load a JSON file."""
+        fpath = self.json_dir / filename
+        if not fpath.exists():
+            return []
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to load %s: %s", fpath, e)
+            return []
+
     def analyze(self) -> CLVAnalysisResult:
         """Run CLV analysis on all customers."""
-        if not self._loaded:
-            if not self.load_data():
-                 raise RuntimeError("Cannot proceed without data")
-
         logger.info("Starting CLV analysis for %d customers", len(self._customers))
         
         # Index invoices by customer
@@ -194,42 +225,33 @@ class CLVPredictor:
         customer_id = customer.get("id", "unknown")
         
         # Calculate tenure
-        created_at = parse_timestamp(customer.get("created_at"))
-        tenure_months = months_ago(created_at)
-        if tenure_months is None:
-             tenure_months = 0
-        tenure_months = max(1, tenure_months) # Ensure at least 1 month
+        created_at = _parse_timestamp(customer.get("created_at"))
+        tenure_months = _months_since(created_at)
         
-        # Calculate historical revenue from invoices
+        # Calculate historical revenue
         historical_revenue = sum(
             (inv.get("total", 0) or 0) / 100
             for inv in invoices
         )
         
         # Calculate recency (days since last invoice)
-        recency_days = 0
         if invoices:
-            valid_dates = [
-                parse_timestamp(inv.get("date")) for inv in invoices
-            ]
-            valid_dates = [d for d in valid_dates if d is not None]
-
-            if valid_dates:
-                last_invoice_date = max(valid_dates)
-                recency_days = days_ago(last_invoice_date) or 0
-
-        # If no invoices, use creation date
-        if not invoices and created_at:
-            recency_days = days_ago(created_at) or 0
+            last_invoice_date = max(
+                _parse_timestamp(inv.get("date")) or datetime.min.replace(tzinfo=timezone.utc)
+                for inv in invoices
+            )
+            recency_days = _days_since(last_invoice_date)
+        else:
+            recency_days = _days_since(created_at)
         
         # Calculate frequency (purchases per month)
-        purchase_frequency = len(invoices) / tenure_months
+        purchase_frequency = len(invoices) / max(tenure_months, 1)
         
         # Calculate monetary value (avg purchase)
         monetary_value = historical_revenue / max(len(invoices), 1)
         
         # Calculate avg monthly revenue
-        avg_monthly_revenue = historical_revenue / tenure_months
+        avg_monthly_revenue = historical_revenue / max(tenure_months, 1)
         
         # Estimate remaining lifetime based on churn signals
         active_subs = [s for s in subscriptions if s.get("status") == "active"]

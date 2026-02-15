@@ -11,8 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .utils import days_ago, load_json_file, parse_timestamp
-
 logger = logging.getLogger("chargebee_mapper.payment_failure_predictor")
 
 
@@ -82,6 +80,24 @@ class PaymentFailureAnalysisResult:
         }
 
 
+def _parse_timestamp(ts: int | None) -> datetime | None:
+    """Convert Unix timestamp to datetime."""
+    if ts is None:
+        return None
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except (ValueError, OSError):
+        return None
+
+
+def _days_since(dt: datetime | None) -> int | None:
+    """Calculate days since a datetime."""
+    if dt is None:
+        return None
+    now = datetime.now(timezone.utc)
+    return max(0, (now - dt).days)
+
+
 def _get_risk_level(score: int) -> str:
     """Convert numeric score to risk level."""
     if score >= 70:
@@ -104,16 +120,15 @@ class PaymentFailurePredictor:
         self._transactions: list[dict] = []
         self._payment_sources: list[dict] = []
         self._invoices: list[dict] = []
-        self._loaded = False
 
     def load_data(self) -> bool:
         """Load required JSON data files."""
         logger.info("Loading data from %s", self.json_dir)
         
-        self._customers = load_json_file(self.json_dir / "customers.json")
-        self._transactions = load_json_file(self.json_dir / "transactions.json")
-        self._payment_sources = load_json_file(self.json_dir / "payment_sources.json")
-        self._invoices = load_json_file(self.json_dir / "invoices.json")
+        self._customers = self._load_json("customers.json")
+        self._transactions = self._load_json("transactions.json")
+        self._payment_sources = self._load_json("payment_sources.json")
+        self._invoices = self._load_json("invoices.json")
         
         if not self._transactions:
             logger.error("No transaction data found")
@@ -123,15 +138,23 @@ class PaymentFailurePredictor:
             "Loaded: %d customers, %d transactions, %d payment sources",
             len(self._customers), len(self._transactions), len(self._payment_sources)
         )
-        self._loaded = True
         return True
     
+    def _load_json(self, filename: str) -> list[dict]:
+        """Load a JSON file."""
+        fpath = self.json_dir / filename
+        if not fpath.exists():
+            return []
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to load %s: %s", fpath, e)
+            return []
+
     def analyze(self) -> PaymentFailureAnalysisResult:
         """Run payment failure analysis."""
-        if not self._loaded:
-            if not self.load_data():
-                 raise RuntimeError("Cannot proceed without data")
-
         logger.info("Starting payment failure analysis")
         
         # Index data by customer
@@ -246,15 +269,15 @@ class PaymentFailurePredictor:
         # Check recent failures (last 90 days)
         recent_failures = sum(
             1 for t in failed_txns
-            if days_ago(parse_timestamp(t.get("date"))) is not None
-            and days_ago(parse_timestamp(t.get("date"))) <= 90
+            if _days_since(_parse_timestamp(t.get("date"))) is not None
+            and _days_since(_parse_timestamp(t.get("date"))) <= 90
         )
         
         # Last successful payment
         last_success_days = None
         if success_txns:
             latest = max(success_txns, key=lambda x: x.get("date", 0))
-            last_success_days = days_ago(parse_timestamp(latest.get("date")))
+            last_success_days = _days_since(_parse_timestamp(latest.get("date")))
         
         # Get primary payment method
         primary_method = None

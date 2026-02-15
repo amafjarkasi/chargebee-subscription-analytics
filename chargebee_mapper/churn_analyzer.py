@@ -15,8 +15,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .utils import calculate_mrr, days_ago, load_json_file, parse_timestamp
-
 logger = logging.getLogger("chargebee_mapper.churn_analyzer")
 
 # Scoring weights (0-100 scale, higher = more churn risk)
@@ -110,6 +108,24 @@ class ChurnAnalysisResult:
         }
 
 
+def _parse_timestamp(ts: int | None) -> datetime | None:
+    """Convert Unix timestamp to datetime."""
+    if ts is None:
+        return None
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except (ValueError, OSError):
+        return None
+
+
+def _days_ago(dt: datetime | None) -> int | None:
+    """Calculate days since a given datetime."""
+    if dt is None:
+        return None
+    now = datetime.now(timezone.utc)
+    return (now - dt).days
+
+
 def _get_risk_level(score: int) -> str:
     """Convert numeric score to risk level."""
     if score >= 70:
@@ -140,24 +156,32 @@ class ChurnAnalyzer:
         self._subs_by_customer: dict[str, list[dict]] = {}
         self._invoices_by_customer: dict[str, list[dict]] = {}
         self._transactions_by_customer: dict[str, list[dict]] = {}
-        self._loaded = False
 
     def load_data(self) -> bool:
         """Load required JSON data files. Returns True if successful."""
         logger.info("Loading data from %s", self.json_dir)
         
-        # Required file
-        customers_path = self.json_dir / "customers.json"
-        if not customers_path.exists():
-            logger.error("Required file not found: %s", customers_path)
-            return False
+        required_files = ["customers.json"]
+        optional_files = [
+            "subscriptions.json",
+            "invoices.json",
+            "transactions.json",
+            "credit_notes.json",
+        ]
         
-        # Load data files using utility
-        self._customers = load_json_file(customers_path)
-        self._subscriptions = load_json_file(self.json_dir / "subscriptions.json")
-        self._invoices = load_json_file(self.json_dir / "invoices.json")
-        self._transactions = load_json_file(self.json_dir / "transactions.json")
-        self._credit_notes = load_json_file(self.json_dir / "credit_notes.json")
+        # Check required files exist
+        for fname in required_files:
+            fpath = self.json_dir / fname
+            if not fpath.exists():
+                logger.error("Required file not found: %s", fpath)
+                return False
+
+        # Load data files
+        self._customers = self._load_json("customers.json")
+        self._subscriptions = self._load_json("subscriptions.json")
+        self._invoices = self._load_json("invoices.json")
+        self._transactions = self._load_json("transactions.json")
+        self._credit_notes = self._load_json("credit_notes.json")
         
         logger.info(
             "Loaded: %d customers, %d subscriptions, %d invoices, %d transactions",
@@ -169,10 +193,23 @@ class ChurnAnalyzer:
         
         # Build indexes
         self._build_indexes()
-        self._loaded = True
         
         return True
     
+    def _load_json(self, filename: str) -> list[dict]:
+        """Load a JSON file, returning empty list if not found."""
+        fpath = self.json_dir / filename
+        if not fpath.exists():
+            logger.debug("File not found (optional): %s", fpath)
+            return []
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to load %s: %s", fpath, e)
+            return []
+
     def _build_indexes(self) -> None:
         """Build lookup indexes by customer ID."""
         # Index subscriptions by customer_id
@@ -195,11 +232,6 @@ class ChurnAnalyzer:
     
     def analyze(self) -> ChurnAnalysisResult:
         """Run churn analysis on all customers."""
-        if not self._loaded:
-            logger.warning("Data not loaded, attempting to load...")
-            if not self.load_data():
-                raise RuntimeError("Cannot proceed without data")
-
         logger.info("Starting churn analysis for %d customers", len(self._customers))
         
         scores: list[CustomerChurnScore] = []
@@ -257,9 +289,9 @@ class ChurnAnalyzer:
         transactions = self._transactions_by_customer.get(customer_id, [])
         
         # Calculate customer metrics
-        customer_since = parse_timestamp(customer.get("created_at"))
+        customer_since = _parse_timestamp(customer.get("created_at"))
         active_subs = [s for s in subscriptions if s.get("status") == "active"]
-        total_mrr = calculate_mrr(active_subs)
+        total_mrr = self._calculate_mrr(active_subs)
         
         # Find last successful payment
         successful_txns = [
@@ -269,7 +301,7 @@ class ChurnAnalyzer:
         last_payment = None
         if successful_txns:
             latest = max(successful_txns, key=lambda x: x.get("date", 0))
-            last_payment = parse_timestamp(latest.get("date"))
+            last_payment = _parse_timestamp(latest.get("date"))
         
         # ===== CHECK PAYMENT FAILURE SIGNALS =====
         signals.extend(self._check_payment_signals(transactions, invoices))
@@ -311,13 +343,11 @@ class ChurnAnalyzer:
             t for t in transactions 
             if t.get("status") in ("failure", "voided")
         ]
-        # Check if failure was recent (last 30 days)
-        recent_failures = []
-        for t in failed_txns:
-            dt = parse_timestamp(t.get("date"))
-            d_ago = days_ago(dt)
-            if d_ago is not None and d_ago <= 30:
-                recent_failures.append(t)
+        recent_failures = [
+            t for t in failed_txns
+            if _days_ago(_parse_timestamp(t.get("date"))) is not None
+            and _days_ago(_parse_timestamp(t.get("date"))) <= 30
+        ]
         
         if recent_failures:
             signals.append(ChurnSignal(
@@ -362,13 +392,11 @@ class ChurnAnalyzer:
         
         if cancelled_subs:
             # Check if cancelled recently
-            recent_cancels = []
-            for s in cancelled_subs:
-                dt = parse_timestamp(s.get("cancelled_at"))
-                d_ago = days_ago(dt)
-                if d_ago is not None and d_ago <= 90:
-                    recent_cancels.append(s)
-
+            recent_cancels = [
+                s for s in cancelled_subs
+                if _days_ago(_parse_timestamp(s.get("cancelled_at"))) is not None
+                and _days_ago(_parse_timestamp(s.get("cancelled_at"))) <= 90
+            ]
             if recent_cancels:
                 signals.append(ChurnSignal(
                     signal_type="plan_downgraded",
@@ -381,15 +409,7 @@ class ChurnAnalyzer:
         for sub in subscriptions:
             items = sub.get("subscription_items", [])
             for item in items:
-                # If quantity is 1 and price is 0, it *might* be free/minimal, but could also be trial.
-                # Adding check for trial_end to reduce false positives
-                is_trial = False
-                if sub.get("trial_end"):
-                    trial_end = parse_timestamp(sub.get("trial_end"))
-                    if days_ago(trial_end) is not None and days_ago(trial_end) < 0:
-                        is_trial = True
-
-                if not is_trial and item.get("quantity", 1) == 1 and item.get("unit_price", 0) == 0:
+                if item.get("quantity", 1) == 1 and item.get("unit_price", 0) == 0:
                     # Minimal/free plan indicator
                     signals.append(ChurnSignal(
                         signal_type="quantity_reduced",
@@ -410,8 +430,7 @@ class ChurnAnalyzer:
         # Check for recent invoice activity
         if invoices:
             latest_invoice = max(invoices, key=lambda x: x.get("date", 0))
-            dt = parse_timestamp(latest_invoice.get("date"))
-            days_since_invoice = days_ago(dt)
+            days_since_invoice = _days_ago(_parse_timestamp(latest_invoice.get("date")))
             
             if days_since_invoice is not None and days_since_invoice > 60:
                 signals.append(ChurnSignal(
@@ -431,14 +450,11 @@ class ChurnAnalyzer:
         
         # Check for upcoming renewal with no recent engagement
         for sub in active_subs:
-            next_billing = parse_timestamp(sub.get("next_billing_at"))
+            next_billing = _parse_timestamp(sub.get("next_billing_at"))
             if next_billing:
-                # days_ago is positive for past, negative for future.
-                # So for future renewal, days_ago is e.g., -10.
-                # We want "Renewal in 30 days".
-                ago = days_ago(next_billing)
-                if ago is not None and -30 <= ago < 0:
-                    days_until_renewal = abs(ago)
+                days_until_renewal = -_days_ago(next_billing) if _days_ago(next_billing) else None
+                if days_until_renewal is not None and 0 < days_until_renewal <= 30:
+                    # Renewal coming up - check for low engagement signals
                     signals.append(ChurnSignal(
                         signal_type="renewal_soon_no_activity",
                         description=f"Renewal in {days_until_renewal} days",
@@ -459,10 +475,10 @@ class ChurnAnalyzer:
         signals = []
         
         # Check if new customer (< 90 days)
-        customer_since = parse_timestamp(customer.get("created_at"))
+        customer_since = _parse_timestamp(customer.get("created_at"))
         if customer_since:
-            days_as_customer = days_ago(customer_since)
-            if days_as_customer is not None and 0 <= days_as_customer < 90:
+            days_as_customer = _days_ago(customer_since)
+            if days_as_customer is not None and days_as_customer < 90:
                 signals.append(ChurnSignal(
                     signal_type="new_customer",
                     description=f"New customer ({days_as_customer} days)",
@@ -491,6 +507,23 @@ class ChurnAnalyzer:
         
         return signals
     
+    def _calculate_mrr(self, active_subscriptions: list[dict]) -> float:
+        """Calculate total MRR from active subscriptions."""
+        total = 0.0
+        for sub in active_subscriptions:
+            # Try to get MRR from subscription data
+            mrr = sub.get("mrr", 0)
+            if mrr:
+                total += mrr / 100  # Chargebee stores amounts in cents
+            else:
+                # Fallback: sum up item prices
+                items = sub.get("subscription_items", [])
+                for item in items:
+                    amount = item.get("amount", 0) or item.get("unit_price", 0)
+                    quantity = item.get("quantity", 1)
+                    total += (amount * quantity) / 100
+        return total
+
     def save_results(self, result: ChurnAnalysisResult, output_dir: Path) -> Path:
         """Save analysis results to JSON file."""
         output_dir.mkdir(parents=True, exist_ok=True)

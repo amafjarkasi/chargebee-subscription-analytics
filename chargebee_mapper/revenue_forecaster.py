@@ -6,14 +6,13 @@ Supports multiple forecasting approaches when dependencies are available.
 
 import json
 import logging
-import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
-from .utils import calculate_mrr, days_ago, load_json_file, parse_timestamp
+import math
 
 logger = logging.getLogger("chargebee_mapper.revenue_forecaster")
 
@@ -23,7 +22,7 @@ class MonthlyRevenue:
     """Revenue data for a single month."""
     year: int
     month: int
-    mrr: float  # Represents "Billed Revenue" in this context
+    mrr: float
     invoice_count: int
     new_customers: int
     churned_customers: int
@@ -92,6 +91,16 @@ class RevenueForecastResult:
         }
 
 
+def _parse_timestamp(ts: int | None) -> datetime | None:
+    """Convert Unix timestamp to datetime."""
+    if ts is None:
+        return None
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except (ValueError, OSError):
+        return None
+
+
 class RevenueForecaster:
     """Forecasts MRR/ARR using time series analysis."""
     
@@ -103,41 +112,47 @@ class RevenueForecaster:
         self._invoices: list[dict] = []
         self._subscriptions: list[dict] = []
         self._customers: list[dict] = []
-        self._loaded = False
         
     def load_data(self) -> bool:
         """Load required JSON data files."""
         logger.info("Loading data from %s", self.json_dir)
         
-        # We need invoices at minimum
-        if not (self.json_dir / "invoices.json").exists():
-            logger.error("No invoice data found (required for historical revenue)")
-            return False
+        self._invoices = self._load_json("invoices.json")
+        self._subscriptions = self._load_json("subscriptions.json")
+        self._customers = self._load_json("customers.json")
 
-        self._invoices = load_json_file(self.json_dir / "invoices.json")
-        self._subscriptions = load_json_file(self.json_dir / "subscriptions.json")
-        self._customers = load_json_file(self.json_dir / "customers.json")
+        if not self._invoices:
+            logger.error("No invoice data found")
+            return False
 
         logger.info(
             "Loaded: %d invoices, %d subscriptions, %d customers",
             len(self._invoices), len(self._subscriptions), len(self._customers)
         )
-        self._loaded = True
         return True
     
+    def _load_json(self, filename: str) -> list[dict]:
+        """Load a JSON file."""
+        fpath = self.json_dir / filename
+        if not fpath.exists():
+            return []
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to load %s: %s", fpath, e)
+            return []
+
     def analyze(self) -> RevenueForecastResult:
         """Run revenue forecasting analysis."""
-        if not self._loaded:
-             if not self.load_data():
-                 raise RuntimeError("Cannot proceed without data")
-
         logger.info("Starting revenue forecast analysis")
         
         # Build monthly revenue data
         monthly_data = self._build_monthly_revenue()
         
         if len(monthly_data) < 3:
-            logger.warning("Insufficient historical data for reliable forecasting (need 3+ months)")
+            logger.warning("Insufficient historical data for forecasting")
         
         # Calculate current MRR from active subscriptions
         current_mrr = self._calculate_current_mrr()
@@ -148,11 +163,11 @@ class RevenueForecaster:
         # Detect trend
         trend = self._detect_trend(monthly_data)
         
-        # Check for seasonality
+        # Check for seasonality (simplified)
         seasonality = self._detect_seasonality(monthly_data)
         
         # Generate forecast
-        forecast = self._generate_forecast(monthly_data, growth_monthly, current_mrr)
+        forecast = self._generate_forecast(monthly_data, growth_monthly)
         
         result = RevenueForecastResult(
             analysis_timestamp=datetime.now(timezone.utc),
@@ -182,23 +197,15 @@ class RevenueForecaster:
         })
         
         for inv in self._invoices:
-            # Include paid and posted (posted = finalized but potentially unpaid yet, still counts as revenue usually)
             if inv.get("status") not in ("paid", "posted"):
                 continue
             
-            date = parse_timestamp(inv.get("date"))
+            date = _parse_timestamp(inv.get("date"))
             if not date:
                 continue
             
             key = f"{date.year}-{date.month:02d}"
-
-            # Use sub_total (pre-tax) or total (post-tax). Usually revenue means Net Revenue (pre-tax).
-            # Chargebee sub_total excludes tax.
-            amount_cents = inv.get("sub_total", 0)
-            if amount_cents is None:
-                 amount_cents = inv.get("total", 0) # Fallback
-
-            amount = amount_cents / 100.0  # Convert cents to dollars
+            amount = (inv.get("total", 0) or 0) / 100  # Convert cents to dollars
             
             monthly[key]["mrr"] += amount
             monthly[key]["invoice_count"] += 1
@@ -211,7 +218,7 @@ class RevenueForecaster:
         
         for cust in self._customers:
             cid = cust.get("id")
-            created = parse_timestamp(cust.get("created_at"))
+            created = _parse_timestamp(cust.get("created_at"))
             if cid and created:
                 key = f"{created.year}-{created.month:02d}"
                 customer_first_month[cid] = key
@@ -219,7 +226,7 @@ class RevenueForecaster:
         for sub in self._subscriptions:
             cid = sub.get("customer_id")
             if sub.get("status") == "cancelled" and sub.get("cancelled_at"):
-                cancelled = parse_timestamp(sub.get("cancelled_at"))
+                cancelled = _parse_timestamp(sub.get("cancelled_at"))
                 if cancelled and cid:
                     key = f"{cancelled.year}-{cancelled.month:02d}"
                     customer_last_month[cid] = key
@@ -246,12 +253,12 @@ class RevenueForecaster:
     
     def _calculate_current_mrr(self) -> float:
         """Calculate current MRR from active subscriptions."""
-        # Use utility from utils.py logic?
-        # Actually utils.calculate_mrr logic is identical to what we want.
-        # But we need to make sure self._subscriptions is populated.
-        if not self._subscriptions:
-            return 0.0
-        return calculate_mrr(self._subscriptions)
+        total_mrr = 0.0
+        for sub in self._subscriptions:
+            if sub.get("status") == "active":
+                mrr = sub.get("mrr", 0) or 0
+                total_mrr += mrr / 100  # Convert cents to dollars
+        return total_mrr
     
     def _calculate_growth_rates(
         self, monthly_data: list[MonthlyRevenue]
@@ -263,27 +270,18 @@ class RevenueForecaster:
         # Use last 6 months or all available
         recent = monthly_data[-6:] if len(monthly_data) >= 6 else monthly_data
         
-        if len(recent) < 2:
-             return 0.0, 0.0
+        if len(recent) < 2 or recent[0].mrr == 0:
+            return 0.0, 0.0
 
+        # Calculate compound monthly growth rate
         start_mrr = recent[0].mrr
         end_mrr = recent[-1].mrr
         n_months = len(recent) - 1
         
-        if start_mrr <= 0:
-            # Cannot calculate growth from 0 or negative base
+        if start_mrr <= 0 or end_mrr <= 0:
             return 0.0, 0.0
         
-        if end_mrr < 0:
-             end_mrr = 0
-
-        # Compound monthly growth rate
-        try:
-            monthly_rate = (end_mrr / start_mrr) ** (1 / n_months) - 1
-        except ValueError:
-            # Handle negative root issues if they arise
-            return 0.0, 0.0
-
+        monthly_rate = (end_mrr / start_mrr) ** (1 / n_months) - 1
         annual_rate = (1 + monthly_rate) ** 12 - 1
         
         return monthly_rate, annual_rate
@@ -298,9 +296,6 @@ class RevenueForecaster:
         
         # Simple linear regression slope
         n = len(mrr_values)
-        if n == 0:
-             return "stable"
-
         x_mean = (n - 1) / 2
         y_mean = sum(mrr_values) / n
         
@@ -326,7 +321,12 @@ class RevenueForecaster:
     
     def _detect_seasonality(self, monthly_data: list[MonthlyRevenue]) -> bool:
         """Simple seasonality detection."""
-        if len(monthly_data) < 24: # Need at least 2 full years for real seasonality check
+        if len(monthly_data) < 12:
+            return False
+
+        # Check if we have at least 2 years of data
+        years = set(m.year for m in monthly_data)
+        if len(years) < 2:
             return False
         
         # Compare same months across years
@@ -334,48 +334,32 @@ class RevenueForecaster:
         for m in monthly_data:
             by_month[m.month].append(m.mrr)
         
-        # If we have consistent patterns (e.g., specific months always higher than average)
-        # Calculate variance of means of months vs mean of all data?
-        # Simplified: Check if at least 2 years exist
-        years = set(m.year for m in monthly_data)
-        if len(years) < 2:
-            return False
-
-        # Very naive check: Do we have enough data points for monthly comparison?
-        months_with_history = sum(1 for v in by_month.values() if len(v) >= 2)
-        return months_with_history >= 6
+        # If variance within months is lower than across months, seasonality exists
+        # Simplified check
+        return len([m for m in by_month.values() if len(m) >= 2]) >= 6
     
     def _generate_forecast(
-        self, monthly_data: list[MonthlyRevenue], growth_rate: float, current_mrr: float
+        self, monthly_data: list[MonthlyRevenue], growth_rate: float
     ) -> list[ForecastPoint]:
         """Generate future revenue forecasts."""
-        
-        # Base the forecast on the calculated Current MRR from active subscriptions
-        # rather than the last invoice month, as invoice timing can be irregular.
-        # However, if current_mrr is 0 (no subs loaded), fallback to last month invoice.
-        start_mrr = current_mrr
-        if start_mrr == 0 and monthly_data:
-            start_mrr = monthly_data[-1].mrr
-
-        if start_mrr == 0:
+        if not monthly_data:
             return []
         
-        # Calculate standard deviation for confidence intervals based on historical volatility
+        last = monthly_data[-1]
+        last_mrr = last.mrr
+
+        # Calculate standard deviation for confidence intervals
         if len(monthly_data) >= 3:
             mrr_values = [m.mrr for m in monthly_data[-12:]]
             mean_mrr = sum(mrr_values) / len(mrr_values)
-            # Variance calculation handling empty list checked by len check
             variance = sum((x - mean_mrr) ** 2 for x in mrr_values) / len(mrr_values)
             std_dev = math.sqrt(variance)
         else:
-            std_dev = start_mrr * 0.1  # Default 10% uncertainty
+            std_dev = last_mrr * 0.1  # Default 10% uncertainty
         
         forecasts = []
-
-        # Determine start date (next month after now)
-        now = datetime.now(timezone.utc)
-        current_year = now.year
-        current_month = now.month
+        current_year = last.year
+        current_month = last.month
         
         for i in range(1, self.forecast_months + 1):
             # Move to next month
@@ -385,11 +369,10 @@ class RevenueForecaster:
                 current_year += 1
             
             # Project MRR with growth rate
-            projected_mrr = start_mrr * ((1 + growth_rate) ** i)
+            projected_mrr = last_mrr * ((1 + growth_rate) ** i)
             
             # Widen confidence interval over time
-            # Uncertainty grows with sqrt(time) standard assumption in random walk
-            uncertainty = std_dev * math.sqrt(i) * 1.96  # 95% CI (approx)
+            uncertainty = std_dev * math.sqrt(i) * 1.96  # 95% CI
             
             forecasts.append(ForecastPoint(
                 period=f"{current_year}-{current_month:02d}",
