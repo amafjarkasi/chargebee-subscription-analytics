@@ -1,52 +1,58 @@
-# Chargebee Subscription Analytics
+# Chargebee Subscription Analytics 📊
 
-A Python CLI tool that fetches all account data from the Chargebee API and runs rule-based analytics to surface business insights -- churn risk, revenue forecasting, customer lifetime value, payment failures, segmentation, and more.
+A powerful Python CLI tool that fetches all account data from the Chargebee API and runs rule-based analytics to surface business insights. Detect churn risk, forecast revenue, predict customer lifetime value (CLV), analyze payment failures, segment customers, and more.
 
-## Features
+## Features ✨
 
-### Data Fetching
-- Fetches all 36 Chargebee entity types (customers, subscriptions, invoices, transactions, etc.)
-- Async HTTP with configurable concurrency and rate limiting
-- Paginated iteration with exponential backoff and jitter on retries
-- Outputs to both JSON files and a SQLite database
-- Incremental sync support via `updated_at` timestamp tracking
+### 🚀 Data Fetching
+- **Comprehensive:** Fetches all 36 Chargebee entity types (customers, subscriptions, invoices, transactions, etc.)
+- **Efficient:** Uses async HTTP with configurable concurrency and rate limiting.
+- **Incremental:** Supports incremental sync via `updated_at` timestamp tracking.
+- **Streaming:** Streams data directly to a local SQLite database to handle large datasets with minimal memory usage.
+- **Dual Output:** Outputs to both JSON files and a SQLite database for flexibility.
 
-### Analytics (12 Analyzers)
+### 📈 Analytics (12 Analyzers)
+
+All analyzers are rule-based and require no external ML libraries, making them lightweight and easy to deploy.
 
 | Analyzer | Description |
 |---|---|
-| **Churn** | Rule-based churn risk scoring using payment failures, dunning status, billing recency, tenure, and value signals |
-| **Revenue** | MRR/ARR time series forecasting with trend detection and compound monthly growth rate |
-| **CLV** | Customer lifetime value prediction using discount-factor model with tenure, recency, and payment history |
-| **Payment** | Payment failure risk scoring from transaction history, card expiration, dunning, and gateway patterns |
-| **Segmentation** | RFM (Recency, Frequency, Monetary) analysis creating 9 customer segments with geographic distribution |
-| **Expansion** | Upsell/cross-sell opportunity detection based on revenue growth, tenure, MRR, and plan hierarchy |
-| **Refund** | Credit note pattern analysis by reason code with high-refund customer flagging |
-| **Anomaly** | Z-score anomaly detection for billing amounts, overdue invoices, fraud flags, and billing spikes |
-| **Coupon** | Coupon effectiveness analysis with ROI calculation, redemption tracking, and retention correlation |
-| **Cohort** | Monthly cohort retention analysis tracking MRR and churn rates by signup month |
-| **Events** | Event sequence pattern mining to identify common customer journeys and pre-churn patterns |
-| **Deduplication** | Duplicate record detection using email matching and fuzzy company name similarity |
+| **Churn** 🚨 | Identifies customers at risk of churn based on payment failures, dunning status, recent downgrades, and low engagement signals. |
+| **Revenue** 💰 | Forecasts MRR/ARR trends using time series analysis, detecting growth rates and seasonality. |
+| **CLV** 💎 | Predicts Customer Lifetime Value using historical revenue, purchase frequency, and expected tenure. |
+| **Payment** 💳 | Scores payment failure risk based on transaction history, method reliability, and card expiration. |
+| **Segmentation** 🧩 | Groups customers into RFM (Recency, Frequency, Monetary) segments to target high-value or at-risk users. |
+| **Expansion** 🚀 | Identifies upsell/cross-sell opportunities based on usage growth, plan limits, and feature adoption. |
+| **Refund** 💸 | Analyzes refund patterns and credit notes to identify product issues or high-maintenance customers. |
+| **Anomaly** 📉 | Detects billing anomalies like unusual spikes, drops in revenue, or suspicious transaction patterns. |
+| **Coupon** 🎟️ | Evaluates coupon campaign effectiveness, ROI, and redemption rates. |
+| **Cohort** 👥 | Tracks retention and churn rates by signup cohort (monthly/quarterly). |
+| **Events** 📜 | Mines event logs for sequence patterns that precede key customer actions (churn, upgrade). |
+| **Deduplication** 👯 | Finds duplicate customer records using fuzzy matching on names, emails, and company details. |
 
-All analyzers are rule-based and require no external ML libraries.
-
-## Requirements
+## Requirements 📋
 
 - Python 3.11+
 - A Chargebee account with API access
 
-## Installation
+## Installation 🛠️
 
 ```bash
+# Clone the repository
 git clone https://github.com/<your-org>/chargebee-subscription-analytics.git
 cd chargebee-subscription-analytics
+
+# Set up a virtual environment
 python -m venv .venv
-.venv\Scripts\activate   # Windows
-# source .venv/bin/activate  # macOS/Linux
+# Activate:
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Configuration
+## Configuration ⚙️
 
 Create a `.env` file in the project root:
 
@@ -54,124 +60,89 @@ Create a `.env` file in the project root:
 CHARGEBEE_API_KEY=your_api_key_here
 CHARGEBEE_SITE=your-site-name
 
-# Optional
-CHARGEBEE_MAX_CONCURRENCY=20
-CHARGEBEE_PAGE_SIZE=100
-CHARGEBEE_MAX_RETRIES=5
-CHARGEBEE_RATE_LIMIT_RPM=150
-CHARGEBEE_LOG_LEVEL=INFO
-CHARGEBEE_OUTPUT_DIR=output
+# Optional Tuning
+CHARGEBEE_MAX_CONCURRENCY=20      # Max concurrent API requests
+CHARGEBEE_PAGE_SIZE=100           # Records per page (max 100)
+CHARGEBEE_MAX_RETRIES=5           # Retries on rate limits/errors
+CHARGEBEE_RATE_LIMIT_RPM=150      # API Rate limit (requests per minute)
+CHARGEBEE_LOG_LEVEL=INFO          # DEBUG, INFO, WARNING, ERROR
+CHARGEBEE_OUTPUT_DIR=output       # Directory for data and results
 ```
 
-## Usage
+## Usage 🚀
 
-### Fetch Data
+### 1. Fetch Data
+First, download your Chargebee data to the local database.
 
 ```bash
-python -m chargebee_mapper
+python -m chargebee_mapper fetch
 ```
 
-This connects to the Chargebee API, fetches all entity types, and writes the results to:
-- `output/json/` -- One JSON file per entity type
-- `output/chargebee_data.db` -- SQLite database with all records
-- `output/summary.json` -- Fetch run metadata
+This will:
+- Connect to the Chargebee API.
+- Fetch all entity types (customers, subscriptions, invoices, etc.).
+- Stream records to `output/chargebee_data.db` (SQLite).
+- Export JSON files to `output/json/` for easy inspection.
+- Generate a summary report in `output/summary.json`.
 
-### Run Analytics
+### 2. Run Analytics
+Once data is fetched, run the analyzers to generate insights.
 
 ```bash
-# Run all 12 analyses
+# Run all 12 analyses (recommended)
 python -m chargebee_mapper analyze all
 
-# Run a specific analysis
+# Run specific analyses
 python -m chargebee_mapper analyze churn
 python -m chargebee_mapper analyze revenue
 python -m chargebee_mapper analyze segmentation
-
-# Use a custom data directory
-python -m chargebee_mapper analyze all --data-dir /path/to/data
 ```
 
-Analysis results are saved to `output/analysis/` as JSON files.
+Results are saved as JSON files in `output/analysis/`.
 
-### Available Analysis Types
+### Available Analysis Commands
 
-```
-all             Run all analyses
-churn           Churn risk prediction
-revenue         Revenue forecasting (MRR/ARR)
-clv             Customer lifetime value prediction
-payment         Payment failure risk scoring
-segmentation    Customer segmentation (RFM)
-expansion       Expansion/upsell prediction
-refund          Refund and credit note analysis
-anomaly         Billing anomaly detection
-coupon          Coupon effectiveness analysis
-cohort          Cohort retention analysis
-events          Event sequence pattern mining
-deduplication   Duplicate record detection
-```
+| Command | Description |
+|---|---|
+| `analyze all` | Run all available analyzers |
+| `analyze churn` | Predict churn risk scores |
+| `analyze revenue` | Forecast MRR and growth |
+| `analyze clv` | Calculate Customer Lifetime Value |
+| `analyze payment` | Analyze payment failure risks |
+| `analyze segmentation` | Perform RFM segmentation |
+| `analyze expansion` | Find upsell opportunities |
+| `analyze refund` | Analyze refund trends |
+| `analyze anomaly` | Detect billing anomalies |
+| `analyze coupon` | Analyze coupon performance |
+| `analyze cohort` | Run cohort retention analysis |
+| `analyze events` | Mine event sequence patterns |
+| `analyze deduplication` | Find duplicate records |
 
-## Project Structure
+## Troubleshooting 🔧
+
+- **Rate Limits:** If you hit API rate limits (HTTP 429), reduce `CHARGEBEE_MAX_CONCURRENCY` or `CHARGEBEE_RATE_LIMIT_RPM` in `.env`.
+- **Memory Usage:** The tool uses streaming to handle large datasets. If you still encounter memory issues, ensure you are running the `fetch` command which uses the optimized SQLite storage backend.
+- **Missing Data:** Ensure your API key has "Read-Only" access to all resources. Some entities (like "Entitlements" or "Omnichannel") may require specific Chargebee plan features enabled.
+
+## Project Structure 📂
 
 ```
 chargebee_mapper/
-  __main__.py              CLI entry point and analysis orchestration
-  config.py                Configuration loading from environment variables
-  client.py                Async HTTP client with rate limiting and retries
-  fetcher.py               Fetch orchestrator for all entity types
-  entities.py              Entity registry (36 Chargebee API resources)
-  storage.py               JSON and SQLite output writers
-  progress.py              Rich console progress display
-  sync_state.py            Incremental sync state tracking
-  data_cache.py            Shared data cache for analysis operations
-  deduplication.py         Duplicate record detection
-  churn_analyzer.py        Churn risk scoring
-  revenue_forecaster.py    MRR/ARR forecasting
-  clv_predictor.py         Customer lifetime value prediction
-  payment_failure_predictor.py  Payment failure risk scoring
-  customer_segmentation.py RFM customer segmentation
-  expansion_predictor.py   Upsell/cross-sell detection
-  refund_analyzer.py       Credit note analysis
-  anomaly_detector.py      Billing anomaly detection
-  coupon_analyzer.py       Coupon effectiveness analysis
-  cohort_analyzer.py       Cohort retention analysis
-  event_sequence_analyzer.py  Event pattern mining
-  visualizations.py        Optional matplotlib chart generation
+  __main__.py              # CLI entry point
+  client.py                # Async HTTP client with rate limiting
+  fetcher.py               # Orchestrates parallel data fetching
+  storage.py               # SQLite and JSON storage backend
+  utils.py                 # Shared utility functions
 
-tests/
-  conftest.py              Shared test fixtures
-  test_client.py           Rate limiter and HTTP client tests
-  test_config.py           Configuration loading tests
-  test_entities.py         Entity registry tests
-  test_storage.py          SQLite and JSON writer tests
-  test_sync_state.py       Incremental sync state tests
-  test_data_cache.py       Data cache tests
-  test_deduplication.py    Deduplication tests
+  # Analyzers
+  churn_analyzer.py        # Churn risk scoring
+  revenue_forecaster.py    # MRR/ARR forecasting
+  clv_predictor.py         # CLV prediction
+  payment_failure_predictor.py # Payment risk analysis
+  customer_segmentation.py # RFM segmentation
+  ... (other analyzers)
 ```
 
-## Testing
-
-```bash
-pip install pytest pytest-asyncio
-python -m pytest tests/ -v
-```
-
-## Chargebee Entities Fetched
-
-The tool fetches 36 entity types organized as:
-
-**Core Business:** Customer, Subscription, Invoice, Credit Note, Transaction, Order, Quote, Gift
-
-**Product Catalog:** Item Family, Item, Item Price, Differential Price, Price Variant, Plan, Addon, Coupon, Coupon Set, Coupon Code
-
-**Payments & Billing:** Payment Source, Virtual Bank Account, Unbilled Charge, Promotional Credit, Usage
-
-**System:** Event, Comment, Hosted Page, Feature, Entitlement, Currency, Configuration, Site Migration Detail, Ramp, Webhook Endpoint
-
-**Omnichannel:** Omnichannel Subscription, Omnichannel One-Time Order
-
-**Dependent:** Attached Item (requires parent Item ID)
-
-## License
+## License 📄
 
 MIT

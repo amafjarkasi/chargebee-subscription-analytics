@@ -95,6 +95,9 @@ async def run() -> int:
     tracker = ProgressTracker(console)
     storage = StorageManager(config.output_dir)
 
+    # Open storage early for streaming
+    storage.open()
+
     orchestrator = FetchOrchestrator(
         client=client,
         config=config,
@@ -102,6 +105,7 @@ async def run() -> int:
         on_entity_page=tracker.on_entity_page,
         on_entity_done=tracker.on_entity_done,
         on_entity_error=tracker.on_entity_error,
+        storage_manager=storage,
     )
 
     # Run the fetch pipeline
@@ -115,11 +119,13 @@ async def run() -> int:
         logger.error("Authentication failed: %s", e)
         console.print(f"\n[bold red]Authentication failed:[/bold red] {e}")
         console.print("Please check your CHARGEBEE_API_KEY and CHARGEBEE_SITE environment variables.")
+        storage.close()
         return 1
     except KeyboardInterrupt:
         tracker.stop()
         logger.warning("Interrupted by user")
         console.print("\n[yellow]Interrupted by user.[/yellow]")
+        storage.close()
         return 130
     finally:
         tracker.stop()
@@ -139,7 +145,6 @@ async def run() -> int:
     # Write data to storage
     console.print("[bold]Writing output files...[/bold]")
     logger.info("Writing output files...")
-    storage.open()
     try:
         stats = storage.write_all(results, elapsed)
     finally:
