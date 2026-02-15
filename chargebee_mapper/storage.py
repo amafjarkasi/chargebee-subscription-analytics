@@ -167,6 +167,7 @@ class SqliteWriter:
         batch: list[tuple[str, str, int | None, int | None, str | None]] = []
 
         for record in records:
+            # Generate a pseudo-ID if none exists
             # Generate a pseudo-ID if none exists to ensure uniqueness in stats/logs,
             # but for DB PK, we rely on what's in 'id'. If 'id' is missing,
             # we might overwrite if we use a fixed pattern, but Chargebee entities usually have IDs.

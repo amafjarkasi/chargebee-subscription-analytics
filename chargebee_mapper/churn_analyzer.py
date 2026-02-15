@@ -156,7 +156,7 @@ class ChurnAnalyzer:
         self._subs_by_customer: dict[str, list[dict]] = {}
         self._invoices_by_customer: dict[str, list[dict]] = {}
         self._transactions_by_customer: dict[str, list[dict]] = {}
-        
+
     def load_data(self) -> bool:
         """Load required JSON data files. Returns True if successful."""
         logger.info("Loading data from %s", self.json_dir)
@@ -164,7 +164,7 @@ class ChurnAnalyzer:
         required_files = ["customers.json"]
         optional_files = [
             "subscriptions.json",
-            "invoices.json", 
+            "invoices.json",
             "transactions.json",
             "credit_notes.json",
         ]
@@ -175,7 +175,7 @@ class ChurnAnalyzer:
             if not fpath.exists():
                 logger.error("Required file not found: %s", fpath)
                 return False
-        
+
         # Load data files
         self._customers = self._load_json("customers.json")
         self._subscriptions = self._load_json("subscriptions.json")
@@ -209,7 +209,7 @@ class ChurnAnalyzer:
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to load %s: %s", fpath, e)
             return []
-    
+
     def _build_indexes(self) -> None:
         """Build lookup indexes by customer ID."""
         # Index subscriptions by customer_id
@@ -344,7 +344,7 @@ class ChurnAnalyzer:
             if t.get("status") in ("failure", "voided")
         ]
         recent_failures = [
-            t for t in failed_txns 
+            t for t in failed_txns
             if _days_ago(_parse_timestamp(t.get("date"))) is not None
             and _days_ago(_parse_timestamp(t.get("date"))) <= 30
         ]
@@ -523,7 +523,7 @@ class ChurnAnalyzer:
                     quantity = item.get("quantity", 1)
                     total += (amount * quantity) / 100
         return total
-    
+
     def save_results(self, result: ChurnAnalysisResult, output_dir: Path) -> Path:
         """Save analysis results to JSON file."""
         output_dir.mkdir(parents=True, exist_ok=True)

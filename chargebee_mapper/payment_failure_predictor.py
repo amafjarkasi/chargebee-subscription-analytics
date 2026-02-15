@@ -120,7 +120,7 @@ class PaymentFailurePredictor:
         self._transactions: list[dict] = []
         self._payment_sources: list[dict] = []
         self._invoices: list[dict] = []
-        
+
     def load_data(self) -> bool:
         """Load required JSON data files."""
         logger.info("Loading data from %s", self.json_dir)
@@ -152,7 +152,7 @@ class PaymentFailurePredictor:
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to load %s: %s", fpath, e)
             return []
-    
+
     def analyze(self) -> PaymentFailureAnalysisResult:
         """Run payment failure analysis."""
         logger.info("Starting payment failure analysis")

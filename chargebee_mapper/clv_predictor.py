@@ -146,7 +146,7 @@ class CLVPredictor:
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to load %s: %s", fpath, e)
             return []
-    
+
     def analyze(self) -> CLVAnalysisResult:
         """Run CLV analysis on all customers."""
         logger.info("Starting CLV analysis for %d customers", len(self._customers))

@@ -120,11 +120,11 @@ class RevenueForecaster:
         self._invoices = self._load_json("invoices.json")
         self._subscriptions = self._load_json("subscriptions.json")
         self._customers = self._load_json("customers.json")
-        
+
         if not self._invoices:
             logger.error("No invoice data found")
             return False
-            
+
         logger.info(
             "Loaded: %d invoices, %d subscriptions, %d customers",
             len(self._invoices), len(self._subscriptions), len(self._customers)
@@ -143,7 +143,7 @@ class RevenueForecaster:
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to load %s: %s", fpath, e)
             return []
-    
+
     def analyze(self) -> RevenueForecastResult:
         """Run revenue forecasting analysis."""
         logger.info("Starting revenue forecast analysis")
@@ -272,7 +272,7 @@ class RevenueForecaster:
         
         if len(recent) < 2 or recent[0].mrr == 0:
             return 0.0, 0.0
-        
+
         # Calculate compound monthly growth rate
         start_mrr = recent[0].mrr
         end_mrr = recent[-1].mrr
@@ -323,7 +323,7 @@ class RevenueForecaster:
         """Simple seasonality detection."""
         if len(monthly_data) < 12:
             return False
-        
+
         # Check if we have at least 2 years of data
         years = set(m.year for m in monthly_data)
         if len(years) < 2:
@@ -347,7 +347,7 @@ class RevenueForecaster:
         
         last = monthly_data[-1]
         last_mrr = last.mrr
-        
+
         # Calculate standard deviation for confidence intervals
         if len(monthly_data) >= 3:
             mrr_values = [m.mrr for m in monthly_data[-12:]]
