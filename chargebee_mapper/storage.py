@@ -167,10 +167,7 @@ class SqliteWriter:
         batch: list[tuple[str, str, int | None, int | None, str | None]] = []
 
         for record in records:
-            # Generate a pseudo-ID if none exists to ensure uniqueness in stats/logs,
-            # but for DB PK, we rely on what's in 'id'. If 'id' is missing,
-            # we might overwrite if we use a fixed pattern, but Chargebee entities usually have IDs.
-            # If multiple records have no ID, using row count helps uniqueness.
+            # Generate a pseudo-ID if none exists
             record_id = str(record.get("id", f"_no_id_{rows_written}_{id(record)}"))
 
             data_json = json.dumps(record, default=str, ensure_ascii=False)
@@ -311,9 +308,6 @@ class StorageManager:
     def export_json_from_sqlite(self, entity_key: str) -> Path:
         """Read records from SQLite and write to JSON file."""
         records = self.sqlite_writer.get_all_records(entity_key)
-        # Use a dummy FetchResult for compatibility with JsonWriter
-        # We don't have FetchResult accessible easily here, so we create a simple structure
-        # or we just use JsonWriter logic directly.
 
         filepath = self.json_writer.json_dir / f"{entity_key}.json"
         with open(filepath, "w", encoding="utf-8") as f:
