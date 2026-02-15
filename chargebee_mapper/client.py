@@ -23,9 +23,11 @@ class AuthenticationError(Exception):
 class FetchResult:
     """Result of fetching a single entity type."""
 
-    def __init__(self, entity: EntityDef):
+    def __init__(self, entity: EntityDef, streaming: bool = False):
         self.entity = entity
+        self.streaming = streaming
         self.records: list[dict[str, Any]] = []
+        self._streaming_count: int = 0
         self.errors: list[str] = []
         self.pages_fetched: int = 0
         self.api_calls: int = 0
@@ -33,6 +35,8 @@ class FetchResult:
 
     @property
     def count(self) -> int:
+        if self.streaming:
+            return self._streaming_count
         return len(self.records)
 
     @property
@@ -310,12 +314,14 @@ class ChargebeeClient:
         entity: EntityDef,
         parent_id: str | None = None,
         on_page: Any = None,
+        streaming: bool = False,
     ) -> FetchResult:
         """Fetch all records for an entity type, handling pagination.
 
         on_page: optional async callback(entity, page_records, page_num) called after each page.
+        streaming: if True, records are not stored in memory (relies on on_page)
         """
-        result = FetchResult(entity)
+        result = FetchResult(entity, streaming=streaming)
         start = time.monotonic()
         offset = None
 
@@ -328,7 +334,11 @@ class ChargebeeClient:
                 )
                 result.pages_fetched += 1
                 result.api_calls += 1
-                result.records.extend(page_records)
+
+                if streaming:
+                    result._streaming_count += len(page_records)
+                else:
+                    result.records.extend(page_records)
 
                 if on_page:
                     await on_page(entity, page_records, result.pages_fetched)
