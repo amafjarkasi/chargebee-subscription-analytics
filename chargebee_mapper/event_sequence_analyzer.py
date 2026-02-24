@@ -11,6 +11,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
+from .utils import parse_timestamp
+
 logger = logging.getLogger("chargebee_mapper.event_sequence_analyzer")
 
 
@@ -80,16 +82,6 @@ class EventSequenceAnalysisResult:
             "sample_journeys": [j.to_dict() for j in self.sample_journeys],
             "insights": self.insights,
         }
-
-
-def _parse_timestamp(ts: int | None) -> datetime | None:
-    """Convert Unix timestamp to datetime."""
-    if ts is None:
-        return None
-    try:
-        return datetime.fromtimestamp(ts, tz=timezone.utc)
-    except (ValueError, OSError):
-        return None
 
 
 class EventSequenceAnalyzer:
@@ -320,8 +312,8 @@ class EventSequenceAnalyzer:
             if not events:
                 continue
             
-            first_event = _parse_timestamp(events[0].get("occurred_at"))
-            last_event = _parse_timestamp(events[-1].get("occurred_at"))
+            first_event = parse_timestamp(events[0].get("occurred_at"))
+            last_event = parse_timestamp(events[-1].get("occurred_at"))
             
             journey_days = 0
             if first_event and last_event:
@@ -343,8 +335,7 @@ class EventSequenceAnalyzer:
                 events=[
                     {
                         "type": e["type"],
-                        "date": datetime.fromtimestamp(e["occurred_at"], tz=timezone.utc).isoformat()
-                        if e.get("occurred_at") else None,
+                        "date": dt.isoformat() if (dt := parse_timestamp(e.get("occurred_at"))) else None,
                     }
                     for e in events
                 ],
