@@ -349,9 +349,6 @@ class AnomalyDetector:
             if len(invoices) < 3:
                 continue
             
-            amounts = [(inv.get("total", 0) or 0) / 100 for inv in invoices]
-            sorted_amounts = sorted(amounts)
-            
             # Check for sudden large changes
             for i, inv in enumerate(invoices[1:], 1):
                 current = (inv.get("total", 0) or 0) / 100
